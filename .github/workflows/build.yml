@@ -113,11 +113,50 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build debug APK
+        id: gradle_build
         run: |
+          set +e
           ./gradlew assembleDebug \
             --no-daemon \
             --stacktrace \
-            -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g"
+            --no-configuration-cache \
+            -Dorg.gradle.jvmargs="-Xmx3g -XX:MaxMetaspaceSize=1g" \
+            2>&1 | tee build_output.txt
+          GRADLE_EXIT=${PIPESTATUS[0]}
+
+          if [[ $GRADLE_EXIT -ne 0 ]]; then
+            echo ""
+            echo "════════════════════════════════════════════════════"
+            echo "  BUILD FAILED — ROOT CAUSE:"
+            echo "════════════════════════════════════════════════════"
+            # Kotlin compile errors look like: "e: /path/file.kt:42:5 error: ..."
+            echo "--- Kotlin compile errors ---"
+            grep -n "^e: \|error: " build_output.txt | head -30 || echo "(none)"
+            echo ""
+            echo "--- First Caused by: chain ---"
+            grep -n "Caused by:" build_output.txt | head -5 || echo "(none)"
+            echo ""
+            # Print 30 lines after each "Caused by:" (the first 2 occurrences)
+            grep -n "Caused by:" build_output.txt | head -2 | while IFS=: read linenum rest; do
+              echo ">>> Context at line $linenum:"
+              sed -n "$((linenum-2)),$((linenum+30))p" build_output.txt
+              echo "---"
+            done
+            echo ""
+            echo "--- Task that failed ---"
+            grep -n "FAILED\|What went wrong\|Task.*FAILED" build_output.txt | head -10 || echo "(none)"
+            echo "════════════════════════════════════════════════════"
+          fi
+
+          exit $GRADLE_EXIT
+
+      - name: Upload full build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.run_number }}
+          path: build_output.txt
+          retention-days: 7
 
       # ── 7. Upload APK ────────────────────────────────────────────────────────
       - name: Upload APK
